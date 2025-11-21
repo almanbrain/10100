@@ -1,0 +1,5 @@
+{
+  "name": "from Image to 3DParametric to Image",
+  "description": "Create parametric architectural 3D models inspired by any image.",
+  "requestFramePermissions": []
+}

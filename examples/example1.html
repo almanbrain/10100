@@ -1,0 +1,279 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Parametric Twisting Tower</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #f0f0f0; }
+        canvas { display: block; }
+    </style>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+        import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+        // --- Setup Scene ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xf0f0f0);
+        scene.fog = new THREE.Fog(0xffffff, 20, 150);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(40, 30, 40);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.0;
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.autoRotate = true;
+        controls.autoRotateSpeed = 0.5;
+
+        // --- Post Processing ---
+        const renderScene = new RenderPass(scene, camera);
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+        bloomPass.threshold = 0.2;
+        bloomPass.strength = 0.4; // Moderate bloom
+        bloomPass.radius = 0.5;
+
+        const outputPass = new OutputPass();
+
+        const composer = new EffectComposer(renderer);
+        composer.addPass(renderScene);
+        composer.addPass(bloomPass);
+        composer.addPass(outputPass);
+
+        // --- Lighting ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
+        dirLight.position.set(10, 50, 20);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 2048;
+        dirLight.shadow.mapSize.height = 2048;
+        scene.add(dirLight);
+
+        // --- Sky Gradient ---
+        const vertexShader = `
+            varying vec3 vWorldPosition;
+            void main() {
+                vec4 worldPosition = modelMatrix * vec4( position, 1.0 );
+                vWorldPosition = worldPosition.xyz;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+            }
+        `;
+        const fragmentShader = `
+            uniform vec3 topColor;
+            uniform vec3 bottomColor;
+            uniform float offset;
+            uniform float exponent;
+            varying vec3 vWorldPosition;
+            void main() {
+                float h = normalize( vWorldPosition + offset ).y;
+                gl_FragColor = vec4( mix( bottomColor, topColor, max( pow( max( h , 0.0), exponent ), 0.0 ) ), 1.0 );
+            }
+        `;
+        const uniforms = {
+            topColor: { value: new THREE.Color( 0x0077ff ) },
+            bottomColor: { value: new THREE.Color( 0xffffff ) },
+            offset: { value: 33 },
+            exponent: { value: 0.6 }
+        };
+        
+        uniforms.topColor.value.setHex( 0x0077ff );
+        uniforms.bottomColor.value.setHex( 0xffffff );
+
+        const skyGeo = new THREE.SphereGeometry( 500, 32, 15 );
+        const skyMat = new THREE.ShaderMaterial( {
+            uniforms: uniforms,
+            vertexShader: vertexShader,
+            fragmentShader: fragmentShader,
+            side: THREE.BackSide
+        } );
+
+        const sky = new THREE.Mesh( skyGeo, skyMat );
+        scene.add( sky );
+
+        // --- Parametric Geometry Container ---
+        const group = new THREE.Group();
+        scene.add(group);
+
+        // Geometries & Materials (Enhanced)
+        const floorGeo = new THREE.CylinderGeometry(1, 1, 1, 6);
+        floorGeo.rotateY(Math.PI / 6); 
+        
+        // Physical material for better lighting reaction
+        const floorMat = new THREE.MeshPhysicalMaterial({ 
+            color: 0x2266aa, 
+            roughness: 0.2, 
+            metalness: 0.1,
+            clearcoat: 0.8,
+            clearcoatRoughness: 0.1
+        });
+
+        const colGeo = new THREE.CylinderGeometry(0.2, 0.2, 1, 8);
+        const colMat = new THREE.MeshStandardMaterial({ 
+            color: 0xeeeeee,
+            roughness: 0.4,
+            metalness: 0.6
+        });
+
+        let floorsMesh = null;
+        let columnsMesh = null;
+
+        window.toggleWireframe = function(enabled) {
+            floorMat.wireframe = enabled;
+            colMat.wireframe = enabled;
+        };
+
+        window.updateParams = function(scale, height, levels) {
+            if (floorsMesh) {
+                group.remove(floorsMesh);
+                floorsMesh.dispose();
+            }
+            if (columnsMesh) {
+                group.remove(columnsMesh);
+                columnsMesh.dispose();
+            }
+
+            const floorCount = Math.max(5, Math.round(levels));
+            const baseRadius = 5 * scale;
+            const totalHeight = 20 * height;
+            const floorHeight = totalHeight / floorCount;
+            
+            floorsMesh = new THREE.InstancedMesh(floorGeo, floorMat, floorCount);
+            floorsMesh.castShadow = true;
+            floorsMesh.receiveShadow = true;
+            
+            const columnCount = (floorCount - 1) * 6;
+            columnsMesh = new THREE.InstancedMesh(colGeo, colMat, columnCount);
+            columnsMesh.castShadow = true;
+            columnsMesh.receiveShadow = true;
+
+            const dummy = new THREE.Object3D();
+            let colIndex = 0;
+
+            for (let i = 0; i < floorCount; i++) {
+                const y = i * floorHeight;
+                const progress = i / floorCount;
+                
+                const rotation = progress * Math.PI * 2;
+                const taper = 1.0 - (Math.sin(progress * Math.PI) * 0.2);
+                const currentRadius = baseRadius * taper;
+
+                dummy.position.set(0, y, 0);
+                dummy.rotation.set(0, rotation, 0);
+                dummy.scale.set(currentRadius, 0.5, currentRadius); 
+                dummy.updateMatrix();
+                floorsMesh.setMatrixAt(i, dummy.matrix);
+
+                if (i < floorCount - 1) {
+                    for(let c = 0; c < 6; c++) {
+                        const angle = (c / 6) * Math.PI * 2 + rotation;
+                        const r = currentRadius * 0.9;
+                        const cx = Math.cos(angle) * r;
+                        const cz = Math.sin(angle) * r;
+                        
+                        dummy.position.set(cx, y + floorHeight/2, cz);
+                        dummy.rotation.set(0, 0, 0); 
+                        dummy.scale.set(1, floorHeight, 1);
+                        dummy.updateMatrix();
+                        
+                        columnsMesh.setMatrixAt(colIndex++, dummy.matrix);
+                    }
+                }
+            }
+            
+            group.add(floorsMesh);
+            group.add(columnsMesh);
+            
+            group.position.y = -totalHeight / 2;
+        };
+        
+        window.setLightingPreset = function(preset) {
+            switch(preset) {
+                case 'Studio':
+                    uniforms.topColor.value.setHex(0x0077ff);
+                    uniforms.bottomColor.value.setHex(0xffffff);
+                    scene.fog.color.setHex(0xffffff);
+                    dirLight.color.setHex(0xffffff);
+                    dirLight.intensity = 2.0;
+                    break;
+                case 'Daylight':
+                    uniforms.topColor.value.setHex(0x00bfff);
+                    uniforms.bottomColor.value.setHex(0xdcf0ff);
+                    scene.fog.color.setHex(0xdcf0ff);
+                    dirLight.color.setHex(0xffffee);
+                    dirLight.intensity = 2.5;
+                    break;
+                case 'Sunset':
+                    uniforms.topColor.value.setHex(0x4a2254);
+                    uniforms.bottomColor.value.setHex(0xffae00);
+                    scene.fog.color.setHex(0xffcc99);
+                    dirLight.color.setHex(0xffaa00);
+                    dirLight.intensity = 1.5;
+                    break;
+                case 'Night':
+                    uniforms.topColor.value.setHex(0x000000);
+                    uniforms.bottomColor.value.setHex(0x000022);
+                    scene.fog.color.setHex(0x000011);
+                    dirLight.color.setHex(0xaaaaff);
+                    dirLight.intensity = 0.5;
+                    break;
+                case 'Golden Hour':
+                    uniforms.topColor.value.setHex(0xad6e14);
+                    uniforms.bottomColor.value.setHex(0xffd700);
+                    scene.fog.color.setHex(0xffeebb);
+                    dirLight.color.setHex(0xffd700);
+                    dirLight.intensity = 2.0;
+                    break;
+                case 'Stormy':
+                    uniforms.topColor.value.setHex(0x2c3e50);
+                    uniforms.bottomColor.value.setHex(0xbdc3c7);
+                    scene.fog.color.setHex(0xbdc3c7);
+                    dirLight.color.setHex(0xddeeff);
+                    dirLight.intensity = 1.2;
+                    break;
+            }
+        };
+
+        window.updateParams(1.0, 1.0, 20);
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            // Use composer for bloom
+            composer.render();
+        }
+        
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>

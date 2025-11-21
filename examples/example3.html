@@ -1,0 +1,219 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Parametric Voxel Surface</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #cce0ff; }
+        canvas { display: block; }
+    </style>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+        import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xcce0ff);
+        scene.fog = new THREE.Fog(0xcce0ff, 40, 150);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(40, 40, 40);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.0;
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.autoRotate = true;
+        controls.autoRotateSpeed = 0.2;
+
+        // --- Post Processing ---
+        const renderScene = new RenderPass(scene, camera);
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+        bloomPass.threshold = 0.15;
+        bloomPass.strength = 0.25; // Subtle bloom
+        bloomPass.radius = 0.3;
+
+        const outputPass = new OutputPass();
+
+        const composer = new EffectComposer(renderer);
+        composer.addPass(renderScene);
+        composer.addPass(bloomPass);
+        composer.addPass(outputPass);
+
+        // Lights
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const sun = new THREE.DirectionalLight(0xffffff, 2.0);
+        sun.position.set(50, 80, 30);
+        sun.castShadow = true;
+        sun.shadow.mapSize.set(2048, 2048);
+        sun.shadow.bias = -0.0005;
+        scene.add(sun);
+
+        // Ground Plane
+        const groundGeo = new THREE.PlaneGeometry(1000, 1000);
+        const groundMat = new THREE.MeshStandardMaterial({ 
+            color: 0xffffff, 
+            roughness: 0.8, 
+            metalness: 0.1 
+        });
+        const ground = new THREE.Mesh(groundGeo, groundMat);
+        ground.rotation.x = -Math.PI / 2;
+        ground.position.y = -10.1;
+        ground.receiveShadow = true;
+        scene.add(ground);
+
+        const group = new THREE.Group();
+        scene.add(group);
+
+        // Base geometry for Voxels
+        const geometry = new THREE.BoxGeometry(1, 1, 1);
+        // Enhanced material
+        const material = new THREE.MeshPhysicalMaterial({ 
+            color: 0xd2b48c, 
+            roughness: 0.5,
+            metalness: 0.2,
+            clearcoat: 0.3
+        });
+        
+        let mesh = null;
+
+        window.toggleWireframe = function(enabled) {
+            material.wireframe = enabled;
+        };
+
+        window.updateParams = function(scale, height, levels) {
+            if (mesh) {
+                group.remove(mesh);
+                mesh.dispose();
+            }
+
+            const gridSize = Math.max(10, levels); // 10 to 60
+            const count = gridSize * gridSize;
+            
+            const spacing = (1.5 * scale); // Gap between voxels
+            const offset = (gridSize * spacing) / 2;
+            
+            mesh = new THREE.InstancedMesh(geometry, material, count);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            
+            const dummy = new THREE.Object3D();
+            const color = new THREE.Color();
+            
+            let i = 0;
+            for (let x = 0; x < gridSize; x++) {
+                for (let z = 0; z < gridSize; z++) {
+                    
+                    const posX = (x * spacing) - offset;
+                    const posZ = (z * spacing) - offset;
+                    
+                    // Wave Function
+                    const dist = Math.sqrt(posX*posX + posZ*posZ);
+                    const waveY = Math.sin(dist * 0.2) * (5 * height) + (Math.cos(x*0.5)*2);
+                    
+                    const h = Math.max(1, waveY + 10); 
+                    
+                    dummy.position.set(posX, h / 2, posZ);
+                    dummy.scale.set(scale, h, scale);
+                    dummy.updateMatrix();
+                    
+                    mesh.setMatrixAt(i, dummy.matrix);
+                    
+                    // Vary color slightly based on height
+                    color.setHSL(0.08, 0.6, 0.5 + (h / 30));
+                    mesh.setColorAt(i, color);
+                    
+                    i++;
+                }
+            }
+            
+            mesh.instanceMatrix.needsUpdate = true;
+            if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+            
+            group.add(mesh);
+            
+            group.position.y = -10;
+        };
+        
+        window.setLightingPreset = function(preset) {
+             switch(preset) {
+                case 'Studio':
+                    scene.background.setHex(0xf0f0f0);
+                    scene.fog.color.setHex(0xf0f0f0);
+                    sun.color.setHex(0xffffff);
+                    sun.intensity = 2.0;
+                    break;
+                case 'Daylight':
+                    scene.background.setHex(0xcce0ff);
+                    scene.fog.color.setHex(0xcce0ff);
+                    sun.color.setHex(0xffffff);
+                    sun.intensity = 2.0;
+                    break;
+                case 'Sunset':
+                    scene.background.setHex(0xffccaa);
+                    scene.fog.color.setHex(0xffccaa);
+                    sun.color.setHex(0xffaa00);
+                    sun.intensity = 1.5;
+                    break;
+                case 'Night':
+                    scene.background.setHex(0x111122);
+                    scene.fog.color.setHex(0x111122);
+                    sun.color.setHex(0xaaaaff);
+                    sun.intensity = 0.5;
+                    break;
+                 case 'Golden Hour':
+                    scene.background.setHex(0xffeebb);
+                    scene.fog.color.setHex(0xffeebb);
+                    sun.color.setHex(0xffd700);
+                    sun.intensity = 1.8;
+                    break;
+                 case 'Stormy':
+                    scene.background.setHex(0x556677);
+                    scene.fog.color.setHex(0x556677);
+                    sun.color.setHex(0xcceeff);
+                    sun.intensity = 1.0;
+                    break;
+            }
+        };
+
+        window.updateParams(1.0, 1.0, 20);
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            composer.render();
+        }
+        
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>

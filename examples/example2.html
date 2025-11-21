@@ -1,0 +1,224 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Parametric Voronoi Dome</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #111; }
+        canvas { display: block; }
+    </style>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+        import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+        import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x050510);
+        scene.fog = new THREE.Fog(0x050510, 30, 100);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 20, 50);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.0;
+        document.body.appendChild(renderer.domElement);
+
+        // Environment for reflections
+        const pmremGenerator = new THREE.PMREMGenerator(renderer);
+        scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.autoRotate = true;
+
+        // --- Post Processing ---
+        const renderScene = new RenderPass(scene, camera);
+        const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+        bloomPass.threshold = 0.1;
+        bloomPass.strength = 0.6; // Stronger neon bloom
+        bloomPass.radius = 0.2;
+
+        const outputPass = new OutputPass();
+
+        const composer = new EffectComposer(renderer);
+        composer.addPass(renderScene);
+        composer.addPass(bloomPass);
+        composer.addPass(outputPass);
+
+        // Lights
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.2);
+        scene.add(ambientLight);
+
+        const pointLight = new THREE.PointLight(0x00ffff, 5, 100);
+        pointLight.position.set(0, 10, 0);
+        scene.add(pointLight);
+        
+        const rimLight = new THREE.DirectionalLight(0xff00ff, 2);
+        rimLight.position.set(20, 10, -20);
+        scene.add(rimLight);
+
+        // --- Starfield ---
+        const starGeo = new THREE.BufferGeometry();
+        const starCount = 2000;
+        const starPos = new Float32Array(starCount * 3);
+        for(let i=0; i<starCount*3; i++) {
+            starPos[i] = (Math.random() - 0.5) * 300;
+        }
+        starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+        const starMat = new THREE.PointsMaterial({color: 0xffffff, size: 0.3, transparent: true, opacity: 0.8});
+        const stars = new THREE.Points(starGeo, starMat);
+        scene.add(stars);
+
+        const group = new THREE.Group();
+        scene.add(group);
+
+        window.mainMesh = null;
+        window.wireLines = null;
+        window.nodeSpheres = null;
+
+        window.toggleWireframe = function(enabled) {
+            if (window.mainMesh) {
+                window.mainMesh.visible = !enabled;
+            }
+        };
+
+        window.updateParams = function(scale, height, levels) {
+            while(group.children.length > 0){ 
+                const child = group.children[0];
+                if(child.geometry) child.geometry.dispose();
+                group.remove(child); 
+            }
+
+            const radius = 10 * scale;
+            const detail = Math.floor(Math.max(0, Math.min(5, levels / 10))); 
+            
+            const geometry = new THREE.IcosahedronGeometry(radius, detail);
+            
+            const pos = geometry.attributes.position;
+            for(let i=0; i<pos.count; i++){
+                const y = pos.getY(i);
+                if (y < 0) {
+                    pos.setY(i, 0);
+                } else {
+                    pos.setY(i, y * height);
+                }
+            }
+            geometry.computeVertexNormals();
+
+            // 1. Solid Mesh - Enhanced Glass/Crystal Material
+            const solidMat = new THREE.MeshPhysicalMaterial({ 
+                color: 0x222244,
+                roughness: 0.1,
+                metalness: 0.5,
+                transmission: 0.2, // Slightly see-through
+                clearcoat: 1.0,
+                clearcoatRoughness: 0.1,
+                side: THREE.DoubleSide,
+                polygonOffset: true,
+                polygonOffsetFactor: 1,
+                polygonOffsetUnits: 1
+            });
+            window.mainMesh = new THREE.Mesh(geometry, solidMat);
+            group.add(window.mainMesh);
+
+            // 2. Wireframe lines
+            const wireframe = new THREE.WireframeGeometry(geometry);
+            window.wireLines = new THREE.LineSegments(wireframe);
+            window.wireLines.material.depthTest = false;
+            window.wireLines.material.opacity = 0.6;
+            window.wireLines.material.transparent = true;
+            window.wireLines.material.color = new THREE.Color(0x00aaff);
+            window.wireLines.material.blending = THREE.AdditiveBlending;
+            group.add(window.wireLines);
+
+            // 3. Nodes at vertices
+            window.nodeSpheres = new THREE.InstancedMesh(
+                new THREE.SphereGeometry(0.3 * scale, 8, 8),
+                new THREE.MeshBasicMaterial({ color: 0xffffff }),
+                pos.count
+            );
+            
+            const dummy = new THREE.Object3D();
+            for(let i=0; i<pos.count; i++){
+                dummy.position.set(pos.getX(i), pos.getY(i), pos.getZ(i));
+                dummy.updateMatrix();
+                window.nodeSpheres.setMatrixAt(i, dummy.matrix);
+            }
+            group.add(window.nodeSpheres);
+            
+            group.position.y = -5;
+        };
+        
+        window.setLightingPreset = function(preset) {
+             switch(preset) {
+                case 'Studio':
+                    scene.background.setHex(0x222222);
+                    scene.fog.color.setHex(0x222222);
+                    pointLight.color.setHex(0xffffff);
+                    break;
+                case 'Daylight':
+                    scene.background.setHex(0x87ceeb);
+                    scene.fog.color.setHex(0x87ceeb);
+                    pointLight.color.setHex(0xffffee);
+                    break;
+                case 'Sunset':
+                    scene.background.setHex(0x331122);
+                    scene.fog.color.setHex(0x331122);
+                    pointLight.color.setHex(0xffaa00);
+                    break;
+                case 'Night':
+                    scene.background.setHex(0x050510);
+                    scene.fog.color.setHex(0x050510);
+                    pointLight.color.setHex(0x00ffff);
+                    break;
+                case 'Golden Hour':
+                    scene.background.setHex(0x443311);
+                    scene.fog.color.setHex(0x443311);
+                    pointLight.color.setHex(0xffd700);
+                    break;
+                 case 'Stormy':
+                    scene.background.setHex(0x1a202c);
+                    scene.fog.color.setHex(0x1a202c);
+                    pointLight.color.setHex(0xaabbcc);
+                    break;
+            }
+        };
+
+        window.updateParams(1.0, 1.0, 20);
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            stars.rotation.y += 0.0005;
+            composer.render();
+        }
+        
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>
