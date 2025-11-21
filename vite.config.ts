@@ -5,8 +5,7 @@ import react from '@vitejs/plugin-react';
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   return {
-    // ВАЖНО: префикс для GitHub Pages
-    base: '/10100/',
+    base: '/10100/',          // ВАЖНО для GitHub Pages
 
     server: {
       port: 3000,
